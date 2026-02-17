@@ -102,14 +102,7 @@ def unload_table(table):
 def fix_unl(filepath, expected_cols):
     """
     Fix Informix .unl escape conventions and reassemble broken rows.
-
-    Handles:
-      - Escaped backslashes (\\)
-      - Escaped pipes (\|) — literal pipe in data
-      - Continuation lines (\<newline>)
-      - Trailing pipe per line (Informix convention)
-      - HTML/multiline content causing fragmented rows
-      - Short rows with omitted trailing empty fields
+    Uses trailing pipe as row-completion signal.
     """
     with open(filepath, 'r', encoding='latin-1') as f:
         content = f.read()
@@ -126,61 +119,46 @@ def fix_unl(filepath, expected_cols):
     # Step 4: Restore literal backslashes
     content = content.replace('\x00', '\\')
 
-    # Step 5: Strip trailing pipe per line (Informix adds one)
+    # Step 5: Reassemble broken rows using trailing pipe as
+    # row-complete signal. In Informix .unl format, every
+    # complete row ends with | before the newline.
     lines = content.split('\n')
-    cleaned = []
-    for line in lines:
-        if line.endswith('|'):
-            line = line[:-1]
-        cleaned.append(line)
-
-    # Step 6: Reassemble rows that are still fragmented
-    # Uses expected column count to detect and rejoin broken rows
-    # (HTML content with unescaped newlines that slipped through)
     reassembled = []
     current = ""
 
-    for line in cleaned:
+    for line in lines:
         if not line:
             continue
 
         if current:
-            candidate = current + " " + line
+            current = current + " " + line
         else:
-            candidate = line
-
-        col_count = candidate.count('|') + 1
-
-        if col_count == expected_cols:
-            # Perfect — this is a complete row
-            reassembled.append(candidate)
-            current = ""
-        elif col_count < expected_cols:
-            # Row is incomplete — keep accumulating
-            current = candidate
-        else:
-            # Too many columns — flush current, start fresh
-            if current:
-                reassembled.append(current)
             current = line
-            if line.count('|') + 1 == expected_cols:
-                reassembled.append(line)
-                current = ""
 
-    # Don't lose the last row
+        # A trailing pipe means this row is complete
+        if current.endswith('|'):
+            reassembled.append(current)
+            current = ""
+
+    # Flush anything remaining (shouldn't happen normally)
     if current:
         reassembled.append(current)
 
-    # Step 7: Pad short rows with empty fields
+    # Step 6: Now strip trailing pipes and pad short rows
     final = []
     for row in reassembled:
+        # Strip trailing pipe
+        if row.endswith('|'):
+            row = row[:-1]
+
+        # Pad short rows (Informix omits trailing empty fields)
         col_count = row.count('|') + 1
         if col_count < expected_cols:
             row = row + '|' * (expected_cols - col_count)
+
         final.append(row)
 
     return '\n'.join(final) + '\n'
-
 
 def convert_to_parquet(table, unl_path):
     """Convert .unl to Parquet with proper column names from syscolumns."""
