@@ -187,7 +187,10 @@ def convert_to_parquet(table, unl_path):
 
     arrow_table = pv.read_csv(
         tmp_path,
-        parse_options=pv.ParseOptions(delimiter="|"),
+        parse_options=pv.ParseOptions(
+            delimiter="|",
+            quoting=pv.Quoting.NONE
+        ),
         read_options=read_opts,
     )
 
